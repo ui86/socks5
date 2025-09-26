@@ -13,6 +13,21 @@ INSTALL_DIR="/usr/local/bin"
 SERVICE_NAME="socks5"
 GITHUB_REPO="ui86/socks5"
 
+# 检测是否有sudo命令并设置执行特权命令的方式
+has_sudo=false
+if command -v sudo &> /dev/null; then
+    has_sudo=true
+fi
+
+# 执行特权命令的辅助函数
+execute_privileged() {
+    if [ "$has_sudo" = true ]; then
+        sudo "$@"
+    else
+        "$@"
+    fi
+}
+
 # 颜色定义
 RED="\033[31m"
 GREEN="\033[32m"
@@ -47,15 +62,18 @@ check_architecture() {
 
 # 获取最新版本号
 get_latest_version() {
-    echo "正在获取最新版本号..."
+    # 将提示信息输出到标准错误
+    echo "正在获取最新版本号..." >&2
     local latest_version
     # 使用GitHub API获取最新版本号
-    latest_version=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | grep -oP '"tag_name": "\K(.*?)(?=")')
+    # 使用更通用的方法提取版本号，不依赖grep -P
+    latest_version=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"tag_name": "([^"]+)".*/\1/')
     if [ -z "$latest_version" ]; then
-        echo -e "${RED}获取最新版本号失败，使用默认版本 1.0.0${RESET}"
+        echo -e "${RED}获取最新版本号失败，使用默认版本 1.0.0${RESET}" >&2
         latest_version="1.0.0"
     fi
-    echo "最新版本: $latest_version"
+    echo "最新版本: $latest_version" >&2
+    # 只将纯版本号输出到标准输出，供命令替换捕获
     echo "$latest_version"
 }
 
@@ -83,13 +101,13 @@ download_and_install() {
     fi
     
     echo "安装到 ${INSTALL_DIR}..."
-    if ! sudo mv "${temp_dir}/socks5" "${INSTALL_DIR}"; then
+    if ! execute_privileged mv "${temp_dir}/socks5" "${INSTALL_DIR}"; then
         echo -e "${RED}安装失败，请检查权限${RESET}"
         rm -rf "${temp_dir}"
         exit 1
     fi
     
-    sudo chmod +x "${INSTALL_DIR}/socks5"
+    execute_privileged chmod +x "${INSTALL_DIR}/socks5"
     rm -rf "${temp_dir}"
     echo -e "${GREEN}安装成功${RESET}"
 }
@@ -114,7 +132,7 @@ create_systemd_service() {
     fi
     
     # 创建服务文件
-    if ! sudo tee "${service_file}" > /dev/null << EOF
+    if ! execute_privileged tee "${service_file}" > /dev/null << EOF
 [Unit]
 Description=SOCKS5 Proxy Server
 After=network.target
@@ -134,10 +152,9 @@ EOF
     fi
     
     # 重新加载systemd配置
-    sudo systemctl daemon-reload
-    
+execute_privileged systemctl daemon-reload
     # 启用服务（开机自启）
-    sudo systemctl enable "${SERVICE_NAME}"
+execute_privileged systemctl enable "${SERVICE_NAME}"
     
     echo -e "${GREEN}systemd服务创建成功${RESET}"
 }
@@ -145,14 +162,14 @@ EOF
 # 启动服务
 start_service() {
     echo "正在启动服务..."
-    if ! sudo systemctl start "${SERVICE_NAME}"; then
+    if ! execute_privileged systemctl start "${SERVICE_NAME}"; then
         echo -e "${RED}启动服务失败，请运行 'systemctl status ${SERVICE_NAME}' 查看详情${RESET}"
         exit 1
     fi
     
     echo -e "${GREEN}服务启动成功${RESET}"
     echo "服务状态:"
-    sudo systemctl status "${SERVICE_NAME}" --no-pager
+    execute_privileged systemctl status "${SERVICE_NAME}" --no-pager
 
     echo -e "${BLUE}SOCKS5 服务器安装完成！${RESET}"
 
@@ -174,14 +191,14 @@ modify() {
     
     # 停止服务
     echo "正在停止服务..."
-    sudo systemctl stop "${SERVICE_NAME}" 2>/dev/null
+    execute_privileged systemctl stop "${SERVICE_NAME}" 2>/dev/null
     
     # 更新systemd服务文件
     create_systemd_service "${port}" "${user}" "${password}" "${whitelist}"
     
     # 重启服务
     echo "正在重启服务..."
-    if ! sudo systemctl restart "${SERVICE_NAME}"; then
+    if ! execute_privileged systemctl restart "${SERVICE_NAME}"; then
         echo -e "${RED}重启服务失败，请运行 'systemctl status ${SERVICE_NAME}' 查看详情${RESET}"
         exit 1
     fi
@@ -197,25 +214,25 @@ uninstall() {
     
     # 停止服务
     echo "正在停止服务..."
-    sudo systemctl stop "${SERVICE_NAME}" 2>/dev/null
+    execute_privileged systemctl stop "${SERVICE_NAME}" 2>/dev/null
     
     # 禁用服务
     echo "正在禁用服务..."
-    sudo systemctl disable "${SERVICE_NAME}" 2>/dev/null
+    execute_privileged systemctl disable "${SERVICE_NAME}" 2>/dev/null
     
     # 删除服务文件
     local service_file="/etc/systemd/system/${SERVICE_NAME}.service"
     if [ -f "${service_file}" ]; then
         echo "正在删除服务文件..."
-        sudo rm -f "${service_file}"
-        sudo systemctl daemon-reload
+        execute_privileged rm -f "${service_file}"
+        execute_privileged systemctl daemon-reload
     fi
     
     # 删除二进制文件
     local binary_path="${INSTALL_DIR}/socks5"
     if [ -f "${binary_path}" ]; then
         echo "正在删除二进制文件..."
-        sudo rm -f "${binary_path}"
+        execute_privileged rm -f "${binary_path}"
     fi
     
     echo -e "${GREEN}SOCKS5 服务器卸载完成${RESET}"
@@ -264,7 +281,7 @@ get_install_config() {
     password="${DEFAULT_PASSWORD}"
     whitelist="${DEFAULT_WHITELIST}"
     version=""
-    
+
     # 获取端口号
     while true; do
         read -p "请输入SOCKS5服务器端口号 [默认: ${DEFAULT_PORT}]: " input_port
@@ -278,19 +295,19 @@ get_install_config() {
             echo -e "${RED}无效的端口号，请输入1-65535之间的数字${RESET}"
         fi
     done
-    
+
     # 获取是否启用认证
     while true; do
         read -p "是否启用用户认证? (y/n) [默认: n]: " enable_auth
         enable_auth=${enable_auth:-n}
-        
+
         case ${enable_auth} in
             [Yy])
                 read -p "请输入用户名: " user
                 while [ -z "${user}" ]; do
                     read -p "用户名不能为空，请重新输入: " user
                 done
-                
+
                 # shellcheck disable=SC2162
                 read -s -p "请输入密码: " password
                 echo
@@ -310,24 +327,24 @@ get_install_config() {
                 ;;
         esac
     done
-    
+
     # 获取IP白名单
     read -p "请输入IP白名单（多个IP用逗号分隔，留空表示不限制）: " whitelist
-    
+
     # 获取版本信息
     read -p "请输入要安装的版本（留空表示最新版本）: " version
-    
+
     # 显示确认信息
     echo -e "${GREEN}安装配置确认：${RESET}"
     echo "端口: ${port}"
     echo "认证: $(if [ -n "${user}" ] && [ -n "${password}" ]; then echo "启用 (用户名: ${user})"; else echo "禁用"; fi)"
     echo "白名单: $(if [ -n "${whitelist}" ]; then echo "${whitelist}"; else echo "无（允许所有IP）"; fi)"
     echo "版本: $(if [ -n "${version}" ]; then echo "${version}"; else echo "最新版本"; fi)"
-    
+
     while true; do
         read -p "确认以上配置是否正确? (y/n) [默认: y]: " confirm
         confirm=${confirm:-y}
-        
+
         case ${confirm} in
             [Yy])
                 break
@@ -354,50 +371,67 @@ get_modify_config() {
         exit 1
     fi
     
-    # 尝试获取当前配置
-    echo "正在读取当前配置..."
-    # shellcheck disable=SC2155
-    local current_cmd=$(sudo cat "${service_file}" | grep -oP 'ExecStart=/usr/local/bin/socks5 \K.*')
-    
-    # 解析当前参数作为默认值
-    local current_port=${DEFAULT_PORT}
-    local current_user=${DEFAULT_USER}
-    local current_password=${DEFAULT_PASSWORD}
-    local current_whitelist=${DEFAULT_WHITELIST}
-    
-    # 从当前命令行解析参数
-    if [ -n "${current_cmd}" ]; then
-        # 解析端口
-        current_port=$(echo "${current_cmd}" | grep -oP '-p \K\d+')
-        [ -z "${current_port}" ] && current_port=${DEFAULT_PORT}
-        
-        # 解析用户名
-        current_user=$(echo "${current_cmd}" | grep -oP '-user \K\S+')
-        
-        # 解析密码（不显示当前密码）
-        if [ -n "${current_user}" ]; then
-            # shellcheck disable=SC2034
-            current_password="******"
-        fi
-        
-        # 解析白名单
-        current_whitelist=$(echo "${current_cmd}" | grep -oP '--whitelist \K[^ ]+')
+    # 读取 ExecStart 行
+    local exec_start
+    exec_start=$(execute_privileged grep '^ExecStart=' "${service_file}" 2>/dev/null | head -n1)
+    if [ -z "$exec_start" ]; then
+        echo -e "${RED}无法读取服务配置，请检查服务文件${RESET}"
+        exit 1
     fi
-    
+
+    # 提取命令参数部分（去掉 'ExecStart=/usr/local/bin/socks5 '）
+    local cmd_args
+    cmd_args=$(echo "$exec_start" | sed 's|^ExecStart=/usr/local/bin/socks5 ||')
+
+    # 初始化默认值
+    port="${DEFAULT_PORT}"
+    user=""
+    password=""
+    whitelist=""
+
+    # 使用 while + case 安全解析参数
+    set -- $cmd_args  # 将参数拆分为位置参数（注意：不加引号，按空格分割）
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -p)
+                if [ -n "$2" ] && [ "$2" -ge 1 ] && [ "$2" -le 65535 ] 2>/dev/null; then
+                    port="$2"
+                    shift 2
+                else
+                    shift
+                fi
+                ;;
+            -user)
+                user="$2"
+                shift 2
+                ;;
+            -pwd)
+                password="$2"
+                shift 2
+                ;;
+            --whitelist)
+                whitelist="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
     # 显示当前配置
     echo -e "${GREEN}当前配置:${RESET}"
-    echo "  端口: ${current_port}"
-    echo "  认证: $(if [ -n "${current_user}" ]; then echo "启用 (用户名: ${current_user})"; else echo "禁用"; fi)"
-    echo "  白名单: $(if [ -n "${current_whitelist}" ]; then echo "${current_whitelist}"; else echo "无"; fi)"
-    
+    echo "  端口: ${port}"
+    echo "  认证: $(if [ -n "${user}" ]; then echo "启用 (用户名: ${user})"; else echo "禁用"; fi)"
+    echo "  白名单: $(if [ -n "${whitelist}" ]; then echo "${whitelist}"; else echo "无"; fi)"
+
     # 获取新的配置参数
     echo -e "${BLUE}请输入新的配置参数（留空表示保持当前配置）${RESET}"
-    
+
     # 获取端口号
     while true; do
-        read -p "请输入SOCKS5服务器端口号 [当前: ${current_port}]: " input_port
+        read -p "请输入SOCKS5服务器端口号 [当前: ${port}]: " input_port
         if [ -z "${input_port}" ]; then
-            port=${current_port}
             break
         elif [[ "${input_port}" =~ ^[0-9]+$ ]] && [ "${input_port}" -ge 1 ] && [ "${input_port}" -le 65535 ]; then
             port=${input_port}
@@ -406,12 +440,12 @@ get_modify_config() {
             echo -e "${RED}无效的端口号，请输入1-65535之间的数字${RESET}"
         fi
     done
-    
-    # 获取是否启用认证
+
+    # 获取是否修改用户认证
     while true; do
         read -p "是否修改用户认证设置? (y/n) [默认: n]: " change_auth
         change_auth=${change_auth:-n}
-        
+
         case ${change_auth} in
             [Yy])
                 while true; do
@@ -422,7 +456,7 @@ get_modify_config() {
                             while [ -z "${user}" ]; do
                                 read -p "用户名不能为空，请重新输入: " user
                             done
-                            
+
                             read -s -p "请输入密码: " password
                             echo
                             while [ -z "${password}" ]; do
@@ -444,19 +478,15 @@ get_modify_config() {
                 break
                 ;;
             [Nn])
-                # 保持当前设置（注意密码不会保留，需要重新输入如果启用了认证）
-                if [ -n "${current_user}" ]; then
-                    user=${current_user}
-                    read -s -p "请重新输入密码 (留空表示使用当前密码): " input_password
+                # 保持当前设置
+                if [ -n "${user}" ]; then
+                    # 当前有用户，提示是否更改密码
+                    read -s -p "请重新输入密码 (留空表示保留当前密码): " input_password
                     echo
-                    if [ -z "${input_password}" ]; then
-                        # 如果留空，保持当前密码，通过重新读取服务文件获取
-                        # shellcheck disable=SC2155
-                        local current_password_cmd=$(sudo cat "${service_file}" | grep -oP '-pwd \K\S+')
-                        password=${current_password_cmd}
-                    else
-                        password=${input_password}
+                    if [ -n "${input_password}" ]; then
+                        password="${input_password}"
                     fi
+                    # 注意：如果留空，保留原 password（已在上面解析）
                 else
                     user=""
                     password=""
@@ -468,13 +498,11 @@ get_modify_config() {
                 ;;
         esac
     done
-    
+
     # 获取IP白名单
     read -p "请输入IP白名单（多个IP用逗号分隔，留空表示保持当前设置）: " input_whitelist
-    if [ -z "${input_whitelist}" ]; then
-        whitelist=${current_whitelist}
-    else
-        whitelist=${input_whitelist}
+    if [ -n "${input_whitelist}" ]; then
+        whitelist="${input_whitelist}"
     fi
     
     # 显示新配置
