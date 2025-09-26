@@ -24,6 +24,8 @@ jobs:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         goos: ${{ matrix.goos }}
         goarch: ${{ matrix.goarch }}
+        executable_compression: upx
+        md5sum: false
         project_path: "./"
         binary_name: "socks5"
         extra_files: README.md
