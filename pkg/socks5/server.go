@@ -39,6 +39,8 @@ type Server struct {
 	RunnerGroup       *runnergroup.RunnerGroup
 	// RFC: [UDP ASSOCIATE] The server MAY use this information to limit access to the association. Default false, no limit.
 	LimitUDP bool
+	// WhiteList contains the IP addresses that are allowed to connect to the server
+	WhiteList map[string]bool
 }
 
 // UDPExchange used to store client address and remote connection
@@ -48,7 +50,7 @@ type UDPExchange struct {
 }
 
 // NewClassicServer return a server which allow none method
-func NewClassicServer(addr, ip, username, password string, tcpTimeout, udpTimeout int) (*Server, error) {
+func NewClassicServer(addr, ip, username, password string, tcpTimeout, udpTimeout int, whiteList []string) (*Server, error) {
 	_, p, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, err
@@ -64,6 +66,13 @@ func NewClassicServer(addr, ip, username, password string, tcpTimeout, udpTimeou
 	cs := cache.New(cache.NoExpiration, cache.NoExpiration)
 	cs1 := cache.New(cache.NoExpiration, cache.NoExpiration)
 	cs2 := cache.New(cache.NoExpiration, cache.NoExpiration)
+	
+	// Initialize white list
+	whiteListMap := make(map[string]bool)
+	for _, ip := range whiteList {
+		whiteListMap[ip] = true
+	}
+	
 	s := &Server{
 		Method:            m,
 		UserName:          username,
@@ -77,6 +86,7 @@ func NewClassicServer(addr, ip, username, password string, tcpTimeout, udpTimeou
 		AssociatedUDP:     cs1,
 		UDPSrc:            cs2,
 		RunnerGroup:       runnergroup.New(),
+		WhiteList:         whiteListMap,
 	}
 	return s, nil
 }
@@ -180,6 +190,16 @@ func (s *Server) ListenAndServe(h Handler) error {
 				}
 				go func(c *net.TCPConn) {
 					defer c.Close()
+					
+					// Check if client IP is in whitelist
+					clientIP := c.RemoteAddr().(*net.TCPAddr).IP.String()
+					if len(s.WhiteList) > 0 {
+						if !s.WhiteList[clientIP] {
+							log.Printf("Connection rejected from %s (not in whitelist)", clientIP)
+							return
+						}
+					}
+					
 					if err := s.Negotiate(c); err != nil {
 						log.Println(err)
 						return

@@ -8,18 +8,21 @@ import (
 	"os"
 	"socks5/pkg/socks5"
 	"strconv"
+	"strings"
 )
 
 var (
-	port     int
-	username string
-	password string
+	port      int
+	username  string
+	password  string
+	whiteList string
 )
 
 func init() {
 	flag.StringVar(&username, "user", "", "username")
 	flag.StringVar(&password, "pwd", "", "password")
 	flag.IntVar(&port, "p", 1080, "port on listen, must be greater than 0")
+	flag.StringVar(&whiteList, "whitelist", "", "comma-separated list of allowed IP addresses (e.g. '127.0.0.1,1.1.1.1')")
 	flag.Parse()
 }
 
@@ -38,11 +41,30 @@ func main() {
 		serverAddr = addr
 	}
 
-	s, err := socks5.NewClassicServer(serverAddr.String(), "0.0.0.0", username, password, 0, 60)
+	// Parse whitelist
+	var whitelistIPs []string
+	if whiteList != "" {
+		whitelistIPs = strings.Split(whiteList, ",")
+		for i := range whitelistIPs {
+			whitelistIPs[i] = strings.TrimSpace(whitelistIPs[i])
+		}
+	}
+
+	if len(whitelistIPs) == 0 {
+		log.Println("Warning: whitelist is empty, all IPs are allowed")
+	} else {
+		log.Printf("Whitelist: %v\n", whitelistIPs)
+	}
+
+	s, err := socks5.NewClassicServer(serverAddr.String(), "0.0.0.0", username, password, 0, 60, whitelistIPs)
 	if err != nil {
 		log.Println(err)
 		return
 	}
+
+	log.Printf("Server is listening on %s\n", serverAddr.String())
+
+	// Start server
 	if err := s.ListenAndServe(nil); err != nil {
 		log.Println(err)
 		return
