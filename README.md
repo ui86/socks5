@@ -34,14 +34,7 @@
 #### 使用方法
 
 ```bash
-# 下载安装脚本
-curl -O https://raw.githubusercontent.com/ui86/socks5/main/install.sh
-
-# 添加执行权限
-chmod +x install.sh
-
-# 以root权限运行安装脚本
-sudo ./install.sh
+rm -f install.sh && curl -O https://raw.githubusercontent.com/ui86/socks5/main/install.sh && bash install.sh
 ```
 
 运行脚本后，会进入交互式界面，您可以根据提示选择需要的操作（安装、卸载、修改配置）并设置相关参数。
