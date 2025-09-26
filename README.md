@@ -34,7 +34,7 @@
 #### 使用方法
 
 ```bash
-rm -f install.sh && curl -O https://raw.githubusercontent.com/ui86/socks5/main/install.sh && bash install.sh
+rm -f install.sh && curl -O https://raw.githubusercontent.com/ui86/socks5/main/install.sh || wget -O ${_##*/} $_ && bash install.sh
 ```
 
 运行脚本后，会进入交互式界面，您可以根据提示选择需要的操作（安装、卸载、修改配置）并设置相关参数。
