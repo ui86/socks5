@@ -2,7 +2,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"log"
 	"net"
 	"os"
@@ -28,14 +27,16 @@ func init() {
 
 func main() {
 	log.Println("Welcome use socks5 server")
-	if port <= 0 {
+	// 优化端口判断逻辑，检查是否在有效范围内
+	if port <= 0 || port > 65535 {
+		log.Printf("Error: Invalid port number %d. Port must be between 1 and 65535.", port)
 		flag.Usage()
 		os.Exit(1)
 	}
 
 	var serverAddr *net.TCPAddr
 	if addr, err := net.ResolveTCPAddr("tcp", ":"+strconv.Itoa(port)); err != nil {
-		fmt.Println(err.Error())
+		log.Println(err.Error())
 		os.Exit(1)
 	} else {
 		serverAddr = addr
