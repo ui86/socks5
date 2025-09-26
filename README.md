@@ -1,6 +1,6 @@
 # SOCKS5 服务器
 
-一个轻量级、功能完整的SOCKS5代理服务器实现，支持TCP/UDP协议、用户认证以及IP白名单功能。
+一个轻量级、功能完整的SOCKS5代理服务器实现，支持TCP/UDP协议、用户认证、IP白名单功能，以及便捷的安装、卸载和配置修改。
 
 ## 功能特点
 
@@ -12,22 +12,58 @@
 
 ## 安装
 
-### 前提条件
+### 使用安装脚本（推荐）
 
-- Go 1.25.0 或更高版本
+项目提供了便捷的安装脚本，采用交互式操作，支持安装、卸载和修改配置。
 
-### 编译安装
+#### 前提条件
+
+- Linux系统（支持amd64和arm64架构）
+- systemd服务管理器
+- curl命令行工具
+
+#### 安装脚本功能
+
+- 自动检测系统架构
+- 下载最新版本的二进制文件
+- 配置systemd服务
+- 支持自定义端口、认证信息和IP白名单
+- 提供卸载和配置修改功能
+- 采用交互式界面，操作更加直观友好
+
+#### 使用方法
+
+```bash
+# 下载安装脚本
+curl -O https://raw.githubusercontent.com/ui86/socks5/main/install.sh
+
+# 添加执行权限
+chmod +x install.sh
+
+# 以root权限运行安装脚本
+sudo ./install.sh
+```
+
+运行脚本后，会进入交互式界面，您可以根据提示选择需要的操作（安装、卸载、修改配置）并设置相关参数。
+
+### 手动编译安装
+
+如果您希望手动编译安装：
 
 ```bash
 # 克隆仓库
-git clone https://github.com/yourusername/socks5.git
+git clone https://github.com/ui86/socks5.git
 cd socks5
 
 # 编译
 go build
 
-# 运行
+# 手动运行
 ./socks5
+
+# 或者手动安装到系统
+chmod +x socks5
+sudo mv socks5 /usr/local/bin/
 ```
 
 ## 使用方法
@@ -72,7 +108,9 @@ go build
 ./socks5 -p 8080 -user admin -pwd password123 --whitelist 127.0.0.1,192.168.1.0/24
 ```
 
-## 命令行参数说明
+## 服务命令行参数说明
+
+直接运行二进制文件时支持以下参数：
 
 | 参数 | 简写 | 默认值 | 说明 |
 |------|------|--------|------|
