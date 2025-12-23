@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"strings"
@@ -66,13 +65,13 @@ func NewClassicServer(addr, ip, username, password string, tcpTimeout, udpTimeou
 	cs := cache.New(cache.NoExpiration, cache.NoExpiration)
 	cs1 := cache.New(cache.NoExpiration, cache.NoExpiration)
 	cs2 := cache.New(cache.NoExpiration, cache.NoExpiration)
-	
+
 	// Initialize white list
 	whiteListMap := make(map[string]bool)
 	for _, ip := range whiteList {
 		whiteListMap[ip] = true
 	}
-	
+
 	s := &Server{
 		Method:            m,
 		UserName:          username,
@@ -190,7 +189,7 @@ func (s *Server) ListenAndServe(h Handler) error {
 				}
 				go func(c *net.TCPConn) {
 					defer c.Close()
-					
+
 					// Check if client IP is in whitelist
 					clientIP := c.RemoteAddr().(*net.TCPAddr).IP.String()
 					if len(s.WhiteList) > 0 {
@@ -199,7 +198,7 @@ func (s *Server) ListenAndServe(h Handler) error {
 							return
 						}
 					}
-					
+
 					if err := s.Negotiate(c); err != nil {
 						log.Println(err)
 						return
@@ -327,7 +326,7 @@ func (h *DefaultHandle) TCPHandle(s *Server, c *net.TCPConn, r *Request) error {
 		defer close(ch)
 		s.AssociatedUDP.Set(caddr.String(), ch, -1)
 		defer s.AssociatedUDP.Delete(caddr.String())
-		io.Copy(ioutil.Discard, c)
+		io.Copy(io.Discard, c)
 		if Debug {
 			log.Printf("A tcp connection that udp %#v associated closed\n", caddr.String())
 		}
