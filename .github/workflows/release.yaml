@@ -19,13 +19,16 @@ jobs:
         goarch: [amd64, arm64]
     steps:
     - uses: actions/checkout@v5
-    - uses: ui86/go-release-action@v1.0.1
+    - uses: ui86/go-release-action@v1
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         goos: ${{ matrix.goos }}
         goarch: ${{ matrix.goarch }}
         executable_compression: upx
         md5sum: false
+        ldflags: "-w -s"
         project_path: "./"
         binary_name: "socks5"
+        pre_command: |
+            export CGO_ENABLED=0;
         extra_files: README.md
