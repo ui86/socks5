@@ -6,6 +6,6 @@ import (
 )
 
 // TODO
-func (r *Request) bind(c net.Conn) error {
+func (r *Request) bind(_ net.Conn) error {
 	return errors.New("Unsupport BIND now")
 }

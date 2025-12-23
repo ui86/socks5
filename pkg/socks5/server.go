@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	cache "github.com/patrickmn/go-cache"
@@ -19,6 +20,20 @@ var (
 	// ErrUserPassAuth is the error when got invalid username or password
 	ErrUserPassAuth = errors.New("Invalid Username or Password for Auth")
 )
+
+// tcpBufPool 32KB buffer for TCP copy (optimal for io.Copy)
+var tcpBufPool = sync.Pool{
+	New: func() interface{} {
+		return make([]byte, 32*1024)
+	},
+}
+
+// udpBufPool 64KB buffer for UDP packets (covers max UDP size 65535)
+var udpBufPool = sync.Pool{
+	New: func() interface{} {
+		return make([]byte, 65507)
+	},
+}
 
 // Server is socks5 server wrapper
 type Server struct {
@@ -231,13 +246,23 @@ func (s *Server) ListenAndServe(h Handler) error {
 	s.RunnerGroup.Add(&runnergroup.Runner{
 		Start: func() error {
 			for {
-				b := make([]byte, 65507)
+				// 使用缓冲池读取 UDP 数据包
+				b := udpBufPool.Get().([]byte)
+				// 必须重置切片长度到容量，以便完整读取
+				b = b[:cap(b)]
+
 				n, addr, err := s.UDPConn.ReadFromUDP(b)
 				if err != nil {
+					udpBufPool.Put(b) // 发生错误归还
 					return err
 				}
-				go func(addr *net.UDPAddr, b []byte) {
-					d, err := NewDatagramFromBytes(b)
+
+				// 启动 goroutine 处理，传递 buffer 和长度
+				go func(addr *net.UDPAddr, buf []byte, n int) {
+					// 确保处理完归还 buffer
+					defer udpBufPool.Put(buf)
+
+					d, err := NewDatagramFromBytes(buf[0:n])
 					if err != nil {
 						log.Println(err)
 						return
@@ -250,7 +275,7 @@ func (s *Server) ListenAndServe(h Handler) error {
 						log.Println(err)
 						return
 					}
-				}(addr, b[0:n])
+				}(addr, b, n)
 			}
 		},
 		Stop: func() error {
@@ -284,38 +309,33 @@ func (h *DefaultHandle) TCPHandle(s *Server, c *net.TCPConn, r *Request) error {
 			return err
 		}
 		defer rc.Close()
-		go func() {
-			var bf [1024 * 2]byte
+
+		// 优化：使用辅助函数和缓冲池进行数据转发
+		transfer := func(dst io.Writer, src io.Reader, timeout int) {
+			buf := tcpBufPool.Get().([]byte)
+			defer tcpBufPool.Put(buf)
+
 			for {
-				if s.TCPTimeout != 0 {
-					if err := rc.SetDeadline(time.Now().Add(time.Duration(s.TCPTimeout) * time.Second)); err != nil {
+				if timeout != 0 {
+					if conn, ok := src.(net.Conn); ok {
+						conn.SetDeadline(time.Now().Add(time.Duration(timeout) * time.Second))
+					}
+				}
+				n, err := src.Read(buf)
+				if n > 0 {
+					if _, wErr := dst.Write(buf[0:n]); wErr != nil {
 						return
 					}
 				}
-				i, err := rc.Read(bf[:])
 				if err != nil {
 					return
 				}
-				if _, err := c.Write(bf[0:i]); err != nil {
-					return
-				}
-			}
-		}()
-		var bf [1024 * 2]byte
-		for {
-			if s.TCPTimeout != 0 {
-				if err := c.SetDeadline(time.Now().Add(time.Duration(s.TCPTimeout) * time.Second)); err != nil {
-					return nil
-				}
-			}
-			i, err := c.Read(bf[:])
-			if err != nil {
-				return nil
-			}
-			if _, err := rc.Write(bf[0:i]); err != nil {
-				return nil
 			}
 		}
+
+		go transfer(c, rc, s.TCPTimeout)
+		transfer(rc, c, s.TCPTimeout)
+		return nil
 	}
 	if r.Cmd == CmdUDP {
 		caddr, err := r.UDP(c, s.ServerAddr)
@@ -409,7 +429,11 @@ func (h *DefaultHandle) UDPHandle(s *Server, addr *net.UDPAddr, d *Datagram) err
 			ue.RemoteConn.Close()
 			s.UDPExchanges.Delete(ue.ClientAddr.String() + dst)
 		}()
-		var b [65507]byte
+
+		// 优化：使用缓冲池
+		b := udpBufPool.Get().([]byte)
+		defer udpBufPool.Put(b)
+
 		for {
 			select {
 			case <-ch:
@@ -424,12 +448,15 @@ func (h *DefaultHandle) UDPHandle(s *Server, addr *net.UDPAddr, d *Datagram) err
 						return
 					}
 				}
-				n, err := ue.RemoteConn.Read(b[:])
+
+				// 重置 buffer 供 Read 使用
+				buf := b[:cap(b)]
+				n, err := ue.RemoteConn.Read(buf)
 				if err != nil {
 					return
 				}
 				if Debug {
-					log.Printf("Got UDP data from remote. client: %#v server: %#v remote: %#v data: %#v\n", ue.ClientAddr.String(), ue.RemoteConn.LocalAddr().String(), ue.RemoteConn.RemoteAddr().String(), b[0:n])
+					log.Printf("Got UDP data from remote. client: %#v server: %#v remote: %#v data: %#v\n", ue.ClientAddr.String(), ue.RemoteConn.LocalAddr().String(), ue.RemoteConn.RemoteAddr().String(), buf[0:n])
 				}
 				a, addr, port, err := ParseAddress(dst)
 				if err != nil {
@@ -439,7 +466,8 @@ func (h *DefaultHandle) UDPHandle(s *Server, addr *net.UDPAddr, d *Datagram) err
 				if a == ATYPDomain {
 					addr = addr[1:]
 				}
-				d1 := NewDatagram(a, addr, port, b[0:n])
+				// NewDatagram 会拷贝 buf 数据，所以复用 buf 是安全的
+				d1 := NewDatagram(a, addr, port, buf[0:n])
 				if _, err := s.UDPConn.WriteToUDP(d1.Bytes(), ue.ClientAddr); err != nil {
 					return
 				}
