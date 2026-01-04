@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -44,17 +45,20 @@ type Server struct {
 	Addr              string
 	ServerAddr        net.Addr
 	UDPConn           *net.UDPConn
-	// 优化 1: 使用 sync.Map 替代 go-cache
-	UDPExchanges  *sync.Map
-	TCPTimeout    int
-	UDPTimeout    int
-	Handle        Handler
-	AssociatedUDP *sync.Map
-	UDPSrc        *sync.Map
-	RunnerGroup   *runnergroup.RunnerGroup
-	LimitUDP      bool
-	WhiteList     map[string]bool
-	// 优化 2: UDP 处理工作池通道
+	UDPExchanges      *sync.Map
+	TCPTimeout        int
+	UDPTimeout        int
+	Handle            Handler
+	AssociatedUDP     *sync.Map
+	UDPSrc            *sync.Map
+	RunnerGroup       *runnergroup.RunnerGroup
+	LimitUDP          bool
+
+	// 白名单优化：支持精确IP和CIDR网段
+	AllowedIPs   map[string]struct{}
+	AllowedCIDRs []*net.IPNet
+
+	// UDP 并发处理通道
 	udpWorkCh chan *udpTask
 }
 
@@ -84,9 +88,28 @@ func NewClassicServer(addr, ip, username, password string, tcpTimeout, udpTimeou
 		m = MethodUsernamePassword
 	}
 
-	whiteListMap := make(map[string]bool)
-	for _, ip := range whiteList {
-		whiteListMap[ip] = true
+	// 解析白名单：区分普通IP和CIDR网段
+	allowedIPs := make(map[string]struct{})
+	var allowedCIDRs []*net.IPNet
+
+	for _, s := range whiteList {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		// 尝试解析为 CIDR (e.g. 192.168.1.0/24)
+		_, ipNet, err := net.ParseCIDR(s)
+		if err == nil {
+			allowedCIDRs = append(allowedCIDRs, ipNet)
+			continue
+		}
+		// 尝试解析为普通 IP (e.g. 1.2.3.4)
+		ip := net.ParseIP(s)
+		if ip != nil {
+			allowedIPs[ip.String()] = struct{}{}
+			continue
+		}
+		log.Printf("Warning: Invalid whitelist entry skipped: %s", s)
 	}
 
 	s := &Server{
@@ -96,18 +119,38 @@ func NewClassicServer(addr, ip, username, password string, tcpTimeout, udpTimeou
 		SupportedCommands: []byte{CmdConnect, CmdUDP},
 		Addr:              addr,
 		ServerAddr:        saddr,
-		// sync.Map 零值直接可用，无需初始化
-		UDPExchanges:  &sync.Map{},
-		TCPTimeout:    tcpTimeout,
-		UDPTimeout:    udpTimeout,
-		AssociatedUDP: &sync.Map{},
-		UDPSrc:        &sync.Map{},
-		RunnerGroup:   runnergroup.New(),
-		WhiteList:     whiteListMap,
-		// 初始化 UDP 工作通道，缓冲区大小可根据机器配置调整
-		udpWorkCh: make(chan *udpTask, 5000),
+		UDPExchanges:      &sync.Map{},
+		TCPTimeout:        tcpTimeout,
+		UDPTimeout:        udpTimeout,
+		AssociatedUDP:     &sync.Map{},
+		UDPSrc:            &sync.Map{},
+		RunnerGroup:       runnergroup.New(),
+		AllowedIPs:        allowedIPs,
+		AllowedCIDRs:      allowedCIDRs,
+		udpWorkCh:         make(chan *udpTask, 5000), // 缓冲区大小可调整
 	}
 	return s, nil
+}
+
+// IsAllowed 检查 IP 是否在白名单中
+func (s *Server) IsAllowed(ip net.IP) bool {
+	// 如果没有设置白名单，默认允许所有
+	if len(s.AllowedIPs) == 0 && len(s.AllowedCIDRs) == 0 {
+		return true
+	}
+
+	// 1. 精确匹配 (O(1))
+	if _, ok := s.AllowedIPs[ip.String()]; ok {
+		return true
+	}
+
+	// 2. CIDR 网段匹配 (O(N))
+	for _, ipNet := range s.AllowedCIDRs {
+		if ipNet.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) Negotiate(rw io.ReadWriter) error {
@@ -200,15 +243,14 @@ func (s *Server) ListenAndServe(h Handler) error {
 				}
 				go func(c *net.TCPConn) {
 					defer c.Close()
-					clientIP := c.RemoteAddr().(*net.TCPAddr).IP.String()
-					if len(s.WhiteList) > 0 {
-						if !s.WhiteList[clientIP] {
-							log.Printf("Connection rejected from %s (not in whitelist)", clientIP)
-							return
-						}
+					// 优化：TCP 连接入口检查白名单
+					clientIP := c.RemoteAddr().(*net.TCPAddr).IP
+					if !s.IsAllowed(clientIP) {
+						log.Printf("TCP Connection rejected from %s (not in whitelist)", clientIP)
+						return
 					}
+
 					if err := s.Negotiate(c); err != nil {
-						// log.Println(err) // 减少日志噪音
 						return
 					}
 					r, err := s.GetRequest(c)
@@ -238,10 +280,9 @@ func (s *Server) ListenAndServe(h Handler) error {
 		return err
 	}
 
-	// 优化 3: 启动 UDP Worker Pool (例如 128 个并发 worker)
-	// 这避免了在高流量下为每个数据包创建一个 Goroutine 的开销
+	// 优化：启动 UDP Worker Pool (128个并发)
 	numWorkers := 128
-	for range numWorkers {
+	for i := 0; i < numWorkers; i++ {
 		go func() {
 			for task := range s.udpWorkCh {
 				handleUDPTask(s, task)
@@ -261,12 +302,9 @@ func (s *Server) ListenAndServe(h Handler) error {
 					return err
 				}
 
-				// 将任务发送到 Worker Pool
-				// 使用 select 防止任务队列满时阻塞 UDP 读取循环
 				select {
 				case s.udpWorkCh <- &udpTask{addr: addr, buf: b, n: n}:
 				default:
-					// 队列已满，丢弃数据包以保护服务器
 					udpBufPool.Put(b)
 					if Debug {
 						log.Println("UDP worker queue full, dropping packet")
@@ -275,20 +313,27 @@ func (s *Server) ListenAndServe(h Handler) error {
 			}
 		},
 		Stop: func() error {
-			close(s.udpWorkCh) // 停止 worker
+			close(s.udpWorkCh)
 			return s.UDPConn.Close()
 		},
 	})
 	return s.RunnerGroup.Wait()
 }
 
-// handleUDPTask 是 worker 实际执行的逻辑
+// handleUDPTask 处理单个 UDP 任务
 func handleUDPTask(s *Server, t *udpTask) {
-	defer udpBufPool.Put(t.buf) // 确保归还 buffer
+	defer udpBufPool.Put(t.buf)
+
+	// 优化：UDP 包入口检查白名单
+	if !s.IsAllowed(t.addr.IP) {
+		if Debug {
+			log.Printf("UDP Packet rejected from %s", t.addr.IP)
+		}
+		return
+	}
 
 	d, err := NewDatagramFromBytes(t.buf[0:t.n])
 	if err != nil {
-		// log.Println(err)
 		return
 	}
 	if d.Frag != 0x00 {
@@ -311,7 +356,7 @@ type Handler interface {
 type DefaultHandle struct {
 }
 
-// idleTimeoutConn 包装 net.Conn 以支持 io.CopyBuffer 下的空闲超时
+// idleTimeoutConn 包装连接以支持 io.CopyBuffer
 type idleTimeoutConn struct {
 	net.Conn
 	timeout time.Duration
@@ -334,16 +379,11 @@ func (h *DefaultHandle) TCPHandle(s *Server, c *net.TCPConn, r *Request) error {
 		}
 		defer rc.Close()
 
-		// 优化 4: 使用 io.CopyBuffer 替代手动循环
-		// io.CopyBuffer 在 Linux 下可以利用 splice 实现零拷贝，大幅降低 CPU
+		// 优化：使用 io.CopyBuffer 实现零拷贝转发
 		directTransfer := func(dst net.Conn, src net.Conn, timeout int) {
 			buf := tcpBufPool.Get().([]byte)
 			defer tcpBufPool.Put(buf)
-
-			// 包装连接以处理超时
 			srcWrapped := &idleTimeoutConn{Conn: src, timeout: time.Duration(timeout) * time.Second}
-
-			// io.CopyBuffer 会自动处理 Read/Write 循环
 			_, _ = io.CopyBuffer(dst, srcWrapped, buf)
 		}
 
@@ -360,7 +400,7 @@ func (h *DefaultHandle) TCPHandle(s *Server, c *net.TCPConn, r *Request) error {
 		defer close(ch)
 		s.AssociatedUDP.Store(caddr.String(), ch)
 		defer s.AssociatedUDP.Delete(caddr.String())
-		io.Copy(io.Discard, c)
+		io.Copy(io.Discard, c) // Keep TCP connection alive
 		return nil
 	}
 	return ErrUnsupportCmd
@@ -388,7 +428,6 @@ func (h *DefaultHandle) UDPHandle(s *Server, addr *net.UDPAddr, d *Datagram) err
 	}
 
 	dst := d.Address()
-	// 优化 5: 使用 sync.Map 的 Load
 	if any, ok := s.UDPExchanges.Load(src + dst); ok {
 		ue := any.(*UDPExchange)
 		return send(ue, d.Data)
@@ -400,7 +439,6 @@ func (h *DefaultHandle) UDPHandle(s *Server, addr *net.UDPAddr, d *Datagram) err
 	}
 	rc, err := DialUDP("udp", laddr, dst)
 	if err != nil {
-		// 简单的重试逻辑，忽略特定错误检查以简化
 		rc, err = DialUDP("udp", "", dst)
 		if err != nil {
 			return err
@@ -422,8 +460,6 @@ func (h *DefaultHandle) UDPHandle(s *Server, addr *net.UDPAddr, d *Datagram) err
 	}
 	s.UDPExchanges.Store(src+dst, ue)
 
-	// 保持原有的响应读取逻辑，但这部分是 IO 密集型的，通常不会导致 CPU 瓶颈
-	// 如果需要极致优化，这里也可以改用 Worker Pool，但因为需要维持连接状态，Goroutine 是合适的
 	go func(ue *UDPExchange, dst string) {
 		defer func() {
 			ue.RemoteConn.Close()
@@ -445,10 +481,11 @@ func (h *DefaultHandle) UDPHandle(s *Server, addr *net.UDPAddr, d *Datagram) err
 				if err != nil {
 					return
 				}
+
+				// 优化：从 RemoteAddr 直接获取 IP/Port，避免 ParseAddress
 				var a byte
 				var addr, port []byte
 
-				// 获取远程发包方的真实 IP/Port
 				if udpAddr, ok := ue.RemoteConn.RemoteAddr().(*net.UDPAddr); ok {
 					if ip4 := udpAddr.IP.To4(); ip4 != nil {
 						a = ATYPIPv4
@@ -460,7 +497,6 @@ func (h *DefaultHandle) UDPHandle(s *Server, addr *net.UDPAddr, d *Datagram) err
 					port = make([]byte, 2)
 					binary.BigEndian.PutUint16(port, uint16(udpAddr.Port))
 				} else {
-					// Fallback
 					var err error
 					a, addr, port, err = ParseAddress(dst)
 					if err != nil {

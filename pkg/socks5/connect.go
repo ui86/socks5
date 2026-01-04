@@ -7,8 +7,6 @@ import (
 	"net"
 )
 
-// Connect remote conn which u want to connect with your dialer
-// Error or OK both replied.
 func (r *Request) Connect(w io.Writer) (net.Conn, error) {
 	if Debug {
 		log.Println("Call:", r.Address())
@@ -27,6 +25,7 @@ func (r *Request) Connect(w io.Writer) (net.Conn, error) {
 		return nil, err
 	}
 
+	// 优化：直接从结构体获取 IP/Port
 	var a byte
 	var addr, port []byte
 
@@ -41,12 +40,10 @@ func (r *Request) Connect(w io.Writer) (net.Conn, error) {
 		port = make([]byte, 2)
 		binary.BigEndian.PutUint16(port, uint16(tcpAddr.Port))
 	} else {
-		// Fallback (防御性代码)
 		var err error
 		a, addr, port, err = ParseAddress(rc.LocalAddr().String())
 		if err != nil {
 			rc.Close()
-			// ... 错误处理 ...
 			return nil, err
 		}
 		if a == ATYPDomain {

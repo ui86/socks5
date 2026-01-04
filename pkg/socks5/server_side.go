@@ -7,18 +7,13 @@ import (
 )
 
 var (
-	// ErrVersion is version error
-	ErrVersion = errors.New("Invalid Version")
-	// ErrUserPassVersion is username/password auth version error
+	ErrVersion         = errors.New("Invalid Version")
 	ErrUserPassVersion = errors.New("Invalid Version of Username Password Auth")
-	// ErrBadRequest is bad request error
-	ErrBadRequest = errors.New("Bad Request")
+	ErrBadRequest      = errors.New("Bad Request")
 )
 
-// NewNegotiationRequestFrom read negotiation requst packet from client
 func NewNegotiationRequestFrom(r io.Reader) (*NegotiationRequest, error) {
-	// 优化: 使用栈数组
-	var bb [2]byte
+	var bb [2]byte // 优化：栈分配
 	if _, err := io.ReadFull(r, bb[:]); err != nil {
 		return nil, err
 	}
@@ -42,7 +37,6 @@ func NewNegotiationRequestFrom(r io.Reader) (*NegotiationRequest, error) {
 	}, nil
 }
 
-// NewNegotiationReply return negotiation reply packet can be writed into client
 func NewNegotiationReply(method byte) *NegotiationReply {
 	return &NegotiationReply{
 		Ver:    Ver,
@@ -50,7 +44,6 @@ func NewNegotiationReply(method byte) *NegotiationReply {
 	}
 }
 
-// WriteTo write negotiation reply packet into client
 func (r *NegotiationReply) WriteTo(w io.Writer) (int64, error) {
 	i, err := w.Write([]byte{r.Ver, r.Method})
 	if err != nil {
@@ -62,10 +55,9 @@ func (r *NegotiationReply) WriteTo(w io.Writer) (int64, error) {
 	return int64(i), nil
 }
 
-// NewUserPassNegotiationRequestFrom read user password negotiation request packet from client
 func NewUserPassNegotiationRequestFrom(r io.Reader) (*UserPassNegotiationRequest, error) {
-	bb := make([]byte, 2)
-	if _, err := io.ReadFull(r, bb); err != nil {
+	var bb [2]byte // 优化
+	if _, err := io.ReadFull(r, bb[:]); err != nil {
 		return nil, err
 	}
 	if bb[0] != UserPassVer {
@@ -97,7 +89,6 @@ func NewUserPassNegotiationRequestFrom(r io.Reader) (*UserPassNegotiationRequest
 	}, nil
 }
 
-// NewUserPassNegotiationReply return negotiation username password reply packet can be writed into client
 func NewUserPassNegotiationReply(status byte) *UserPassNegotiationReply {
 	return &UserPassNegotiationReply{
 		Ver:    UserPassVer,
@@ -105,7 +96,6 @@ func NewUserPassNegotiationReply(status byte) *UserPassNegotiationReply {
 	}
 }
 
-// WriteTo write negotiation username password reply packet into client
 func (r *UserPassNegotiationReply) WriteTo(w io.Writer) (int64, error) {
 	i, err := w.Write([]byte{r.Ver, r.Status})
 	if err != nil {
@@ -117,10 +107,8 @@ func (r *UserPassNegotiationReply) WriteTo(w io.Writer) (int64, error) {
 	return int64(i), nil
 }
 
-// NewRequestFrom read requst packet from client
 func NewRequestFrom(r io.Reader) (*Request, error) {
-	// 优化: 使用栈数组
-	var bb [4]byte
+	var bb [4]byte // 优化
 	if _, err := io.ReadFull(r, bb[:]); err != nil {
 		return nil, err
 	}
@@ -130,8 +118,6 @@ func NewRequestFrom(r io.Reader) (*Request, error) {
 	var addr []byte
 	switch bb[3] {
 	case ATYPIPv4:
-		// 优化: 小对象直接分配，或者这里为了返回 slice 仍需 make，但大小固定
-		// 考虑到 Request 结构体持有 slice，这里必须 make，无法完全消除
 		addr = make([]byte, 4)
 		if _, err := io.ReadFull(r, addr); err != nil {
 			return nil, err
@@ -142,7 +128,7 @@ func NewRequestFrom(r io.Reader) (*Request, error) {
 			return nil, err
 		}
 	case ATYPDomain:
-		var dal [1]byte // 使用栈数组读取长度
+		var dal [1]byte
 		if _, err := io.ReadFull(r, dal[:]); err != nil {
 			return nil, err
 		}
@@ -174,7 +160,6 @@ func NewRequestFrom(r io.Reader) (*Request, error) {
 	}, nil
 }
 
-// NewReply return reply packet can be writed into client, bndaddr should not have domain length
 func NewReply(rep byte, atyp byte, bndaddr []byte, bndport []byte) *Reply {
 	if atyp == ATYPDomain {
 		bndaddr = append([]byte{byte(len(bndaddr))}, bndaddr...)
@@ -189,7 +174,6 @@ func NewReply(rep byte, atyp byte, bndaddr []byte, bndport []byte) *Reply {
 	}
 }
 
-// WriteTo write reply packet into client
 func (r *Reply) WriteTo(w io.Writer) (int64, error) {
 	i, err := w.Write(append(append([]byte{r.Ver, r.Rep, r.Rsv, r.Atyp}, r.BndAddr...), r.BndPort...))
 	if err != nil {
@@ -253,13 +237,9 @@ func NewDatagramFromBytes(bb []byte) (*Datagram, error) {
 		DstPort: port,
 		Data:    data,
 	}
-	if Debug {
-		log.Printf("Got Datagram. data: %#v %#v %#v %#v %#v %#v datagram address: %#v\n", d.Rsv, d.Frag, d.Atyp, d.DstAddr, d.DstPort, d.Data, d.Address())
-	}
 	return d, nil
 }
 
-// NewDatagram return datagram packet can be writed into client, dstaddr should not have domain length
 func NewDatagram(atyp byte, dstaddr []byte, dstport []byte, data []byte) *Datagram {
 	if atyp == ATYPDomain {
 		dstaddr = append([]byte{byte(len(dstaddr))}, dstaddr...)
@@ -274,9 +254,8 @@ func NewDatagram(atyp byte, dstaddr []byte, dstport []byte, data []byte) *Datagr
 	}
 }
 
-// Bytes return []byte
 func (d *Datagram) Bytes() []byte {
-	b := make([]byte, 0)
+	b := make([]byte, 0, len(d.Rsv)+1+1+len(d.DstAddr)+len(d.DstPort)+len(d.Data))
 	b = append(b, d.Rsv...)
 	b = append(b, d.Frag)
 	b = append(b, d.Atyp)
