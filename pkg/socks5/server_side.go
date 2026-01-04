@@ -17,9 +17,9 @@ var (
 
 // NewNegotiationRequestFrom read negotiation requst packet from client
 func NewNegotiationRequestFrom(r io.Reader) (*NegotiationRequest, error) {
-	// memory strict
-	bb := make([]byte, 2)
-	if _, err := io.ReadFull(r, bb); err != nil {
+	// 优化: 使用栈数组
+	var bb [2]byte
+	if _, err := io.ReadFull(r, bb[:]); err != nil {
 		return nil, err
 	}
 	if bb[0] != Ver {
@@ -119,8 +119,9 @@ func (r *UserPassNegotiationReply) WriteTo(w io.Writer) (int64, error) {
 
 // NewRequestFrom read requst packet from client
 func NewRequestFrom(r io.Reader) (*Request, error) {
-	bb := make([]byte, 4)
-	if _, err := io.ReadFull(r, bb); err != nil {
+	// 优化: 使用栈数组
+	var bb [4]byte
+	if _, err := io.ReadFull(r, bb[:]); err != nil {
 		return nil, err
 	}
 	if bb[0] != Ver {
@@ -129,6 +130,8 @@ func NewRequestFrom(r io.Reader) (*Request, error) {
 	var addr []byte
 	switch bb[3] {
 	case ATYPIPv4:
+		// 优化: 小对象直接分配，或者这里为了返回 slice 仍需 make，但大小固定
+		// 考虑到 Request 结构体持有 slice，这里必须 make，无法完全消除
 		addr = make([]byte, 4)
 		if _, err := io.ReadFull(r, addr); err != nil {
 			return nil, err
@@ -139,8 +142,8 @@ func NewRequestFrom(r io.Reader) (*Request, error) {
 			return nil, err
 		}
 	case ATYPDomain:
-		dal := make([]byte, 1)
-		if _, err := io.ReadFull(r, dal); err != nil {
+		var dal [1]byte // 使用栈数组读取长度
+		if _, err := io.ReadFull(r, dal[:]); err != nil {
 			return nil, err
 		}
 		if dal[0] == 0 {
@@ -150,7 +153,7 @@ func NewRequestFrom(r io.Reader) (*Request, error) {
 		if _, err := io.ReadFull(r, addr); err != nil {
 			return nil, err
 		}
-		addr = append(dal, addr...)
+		addr = append(dal[:], addr...)
 	default:
 		return nil, ErrBadRequest
 	}
