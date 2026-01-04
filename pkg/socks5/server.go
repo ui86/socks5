@@ -1,6 +1,7 @@
 package socks5
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -444,15 +445,37 @@ func (h *DefaultHandle) UDPHandle(s *Server, addr *net.UDPAddr, d *Datagram) err
 				if err != nil {
 					return
 				}
-				a, addr, port, err := ParseAddress(dst)
-				if err != nil {
+				var a byte
+				var addr, port []byte
+
+				// 获取远程发包方的真实 IP/Port
+				if udpAddr, ok := ue.RemoteConn.RemoteAddr().(*net.UDPAddr); ok {
+					if ip4 := udpAddr.IP.To4(); ip4 != nil {
+						a = ATYPIPv4
+						addr = ip4
+					} else {
+						a = ATYPIPv6
+						addr = udpAddr.IP
+					}
+					port = make([]byte, 2)
+					binary.BigEndian.PutUint16(port, uint16(udpAddr.Port))
+				} else {
+					// Fallback
+					var err error
+					a, addr, port, err = ParseAddress(dst)
+					if err != nil {
+						log.Println(err)
+						return
+					}
+					if a == ATYPDomain {
+						addr = addr[1:]
+					}
+				}
+
+				d1 := NewDatagram(a, addr, port, buf[0:n])
+				if _, err := s.UDPConn.WriteToUDP(d1.Bytes(), ue.ClientAddr); err != nil {
 					return
 				}
-				if a == ATYPDomain {
-					addr = addr[1:]
-				}
-				d1 := NewDatagram(a, addr, port, buf[0:n])
-				s.UDPConn.WriteToUDP(d1.Bytes(), ue.ClientAddr)
 			}
 		}
 	}(ue, dst)
