@@ -12,10 +12,19 @@ import (
 func (r *Request) UDP(c net.Conn, serverAddr net.Addr) (net.Addr, error) {
 	var clientAddr net.Addr
 	var err error
+	// 直接通过类型断言获取 IP 和 Port，这比字符串解析快得多
 	if bytes.Equal(r.DstPort, []byte{0x00, 0x00}) {
-		// If the requested Host/Port is all zeros, the relay should simply use the Host/Port that sent the request.
-		// https://stackoverflow.com/questions/62283351/how-to-use-socks-5-proxy-with-tidudpclient-properly
-		clientAddr, err = net.ResolveUDPAddr("udp", c.RemoteAddr().String())
+		if tcpAddr, ok := c.RemoteAddr().(*net.TCPAddr); ok {
+			// 将 TCP 地址转换为 UDP 地址 (假设客户端使用相同的 IP 和 Port)
+			clientAddr = &net.UDPAddr{
+				IP:   tcpAddr.IP,
+				Port: tcpAddr.Port,
+				Zone: tcpAddr.Zone,
+			}
+		} else {
+			// 回退方案
+			clientAddr, err = net.ResolveUDPAddr("udp", c.RemoteAddr().String())
+		}
 	} else {
 		clientAddr, err = net.ResolveUDPAddr("udp", r.Address())
 	}

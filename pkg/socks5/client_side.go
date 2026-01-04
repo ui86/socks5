@@ -34,8 +34,9 @@ func (r *NegotiationRequest) WriteTo(w io.Writer) (int64, error) {
 
 // NewNegotiationReplyFrom read negotiation reply packet from server
 func NewNegotiationReplyFrom(r io.Reader) (*NegotiationReply, error) {
-	bb := make([]byte, 2)
-	if _, err := io.ReadFull(r, bb); err != nil {
+	// 优化 3: 使用栈内存
+	var bb [2]byte
+	if _, err := io.ReadFull(r, bb[:]); err != nil {
 		return nil, err
 	}
 	if bb[0] != Ver {
@@ -75,8 +76,9 @@ func (r *UserPassNegotiationRequest) WriteTo(w io.Writer) (int64, error) {
 
 // NewUserPassNegotiationReplyFrom read user password negotiation reply packet from server
 func NewUserPassNegotiationReplyFrom(r io.Reader) (*UserPassNegotiationReply, error) {
-	bb := make([]byte, 2)
-	if _, err := io.ReadFull(r, bb); err != nil {
+	// 优化 4: 使用栈内存
+	var bb [2]byte
+	if _, err := io.ReadFull(r, bb[:]); err != nil {
 		return nil, err
 	}
 	if bb[0] != UserPassVer {
@@ -120,8 +122,9 @@ func (r *Request) WriteTo(w io.Writer) (int64, error) {
 
 // NewReplyFrom read reply packet from server
 func NewReplyFrom(r io.Reader) (*Reply, error) {
-	bb := make([]byte, 4)
-	if _, err := io.ReadFull(r, bb); err != nil {
+	// 优化 5: 使用栈内存
+	var bb [4]byte
+	if _, err := io.ReadFull(r, bb[:]); err != nil {
 		return nil, err
 	}
 	if bb[0] != Ver {
@@ -140,8 +143,8 @@ func NewReplyFrom(r io.Reader) (*Reply, error) {
 			return nil, err
 		}
 	case ATYPDomain:
-		dal := make([]byte, 1)
-		if _, err := io.ReadFull(r, dal); err != nil {
+		var dal [1]byte // 优化
+		if _, err := io.ReadFull(r, dal[:]); err != nil {
 			return nil, err
 		}
 		if dal[0] == 0 {
@@ -151,7 +154,7 @@ func NewReplyFrom(r io.Reader) (*Reply, error) {
 		if _, err := io.ReadFull(r, addr); err != nil {
 			return nil, err
 		}
-		addr = append(dal, addr...)
+		addr = append(dal[:], addr...)
 	default:
 		return nil, ErrBadReply
 	}
