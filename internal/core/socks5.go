@@ -1,4 +1,4 @@
-package socks5
+package core
 
 const (
 	// Ver is socks protocol version
