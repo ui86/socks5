@@ -112,28 +112,6 @@ sudo mv socks5 /usr/local/bin/
 | `--port` | `-p` | 1080 | 服务器监听端口 |
 | `--whitelist` | | 空 | 允许连接的IP地址列表，多个IP用逗号分隔，为空时允许所有IP连接 |
 
-## 项目结构
-
-```
-socks5/
-├── main.go         # 程序入口
-├── pkg/
-│   └── socks5/
-│       ├── bind.go         # BIND命令实现
-│       ├── client.go       # 客户端相关功能
-│       ├── client_side.go  # 客户端侧处理逻辑
-│       ├── connect.go      # CONNECT命令实现
-│       ├── init.go         # 初始化相关功能
-│       ├── server.go       # 服务器核心实现
-│       ├── server_side.go  # 服务器侧处理逻辑
-│       ├── socks5.go       # 协议定义和基础结构
-│       ├── udp.go          # UDP相关功能
-│       └── util.go         # 工具函数
-├── go.mod          # Go模块定义
-├── go.sum          # 依赖版本锁定
-└── README.md       # 项目文档
-```
-
 ## 核心功能说明
 
 ### 1. 服务器启动流程
@@ -157,7 +135,6 @@ socks5/
 
 ## 依赖说明
 
-- [github.com/patrickmn/go-cache](https://github.com/patrickmn/go-cache) - 提供内存缓存功能，用于存储UDP关联信息
 - [github.com/txthinking/runnergroup](https://github.com/txthinking/runnergroup) - 提供并发任务管理功能，用于管理TCP和UDP监听器
 
 ## 性能与安全
